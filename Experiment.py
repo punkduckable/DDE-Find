@@ -108,13 +108,14 @@ if(  Config['Experiment'] == "Exponential"):
 # Logistic 
 elif(Config['Experiment'] == "Logistic"):
     from    Model   import  Logistic            as F_Model;
-    from    X0      import  Affine              as X0_Model;
+    from    X0      import  Periodic            as X0_Model;
 
     # Set up the parameters and tau value for the target trajectory.
-    F_Target        = F_Model(theta_0 = 1.0, theta_1 = 1.0);
-    a_Target        = torch.Tensor([0.5]);
+    F_Target        = F_Model(theta_0 = 2.0, theta_1 = 1.5);
+    A_Target        = torch.Tensor([-0.5]);
+    w_Target        = torch.Tensor([3.0]);
     b_Target        = torch.Tensor([2]);
-    X0_Target       = X0_Model(a = a_Target, b = b_Target);
+    X0_Target       = X0_Model(A = A_Target, w = w_Target, b = b_Target);
     tau_Target      = torch.tensor(1.0);
     N_tau           = 10;
     T_Target        = torch.tensor(10.0);
@@ -207,13 +208,14 @@ for Noise_Level in Config['Noise Levels']:
         elif(Config['Experiment'] == "Logistic"):
             # Pick a starting position, tau, and x0
             tau     = (tau_Target*0.5).clone().detach().requires_grad_(True);
-            a       = (a_Target*1.2).clone().detach().requires_grad_(True);
-            b       = (b_Target*0.7).clone().detach().requires_grad_(True);
+            A       = (A_Target*0.5).clone().detach().requires_grad_(True);
+            w       = (w_Target*2.0).clone().detach().requires_grad_(True);
+            b       = (b_Target*1.3).clone().detach().requires_grad_(True);
             T       = torch.clone(T_Target).requires_grad_(False);
 
             # Set up a NDDE object. We will try to train the enclosed model to match the one we used to generate the above plot.
             F_MODEL             = F_Model(theta_0 = 1.0, theta_1 = 1.0);
-            X0_MODEL            = X0_Model(a, b);
+            X0_MODEL            = X0_Model(A, w, b);
             Param_List  : List  = [tau] + list(F_MODEL.parameters()) + list(X0_MODEL.parameters());
 
 

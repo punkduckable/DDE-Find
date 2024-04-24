@@ -461,7 +461,7 @@ class Neural(torch.nn.Module):
 
         Widths: This should be a list of N + 1 integers, where N is the number of layers in the 
         neural network. Widths[0] represents the dimension of the domain, while Widths[-1] 
-        represents the dimension of the co-domain. For i \in {1, 2, ... , N - 1}, Widths[i] 
+        represents the dimension of the co-domain. For i \in {1, 2, ... , N - 2}, Widths[i] 
         represents the width of the i'th hidden layer. Because a Neural object takes in x(t), y(t), 
         tau, and t as inputs (and the former two live in \mathbb{R}^d), Widths[0] must be 2d + 2 
         (even and >= 4). Finally, Widths[1] must be d. 
