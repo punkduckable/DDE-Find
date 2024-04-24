@@ -523,7 +523,7 @@ class DDE_adjoint_Backward(torch.autograd.Function):
         p_0 : torch.Tensor  = p[0, :]*(1 + t_0/dt) - (t_0/dt)*p[1, :];
 
         # Next, let's compute (dX0_dPhi(0))^T p(0)
-        dX0dPhi_T_p_t0       = torch.autograd.grad(                     outputs         = X0(torch.tensor(0)).reshape(-1), 
+        dX0dPhi_T_p_t0       = torch.autograd.grad(                     outputs         = X0(torch.tensor(0, dtype = torch.float32)).reshape(-1), 
                                                                         inputs          = X0_Params,
                                                                         grad_outputs    = p_0);
         torch.set_grad_enabled(True);

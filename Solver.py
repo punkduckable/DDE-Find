@@ -51,7 +51,7 @@ def Forward_Euler(F : torch.nn.Module, X0 : torch.Tensor, tau : torch.Tensor, T 
     N   : int           = int(torch.ceil(T/dt).item());
 
     # Now, get the IC. We also use this chance to recover d.
-    X0_0    : torch.Tensor  = X0(torch.tensor(0));
+    X0_0    : torch.Tensor  = X0(torch.tensor(0, dtype = torch.float32));
     d       : int           = X0_0.shape[1];
 
     # Set up tensors to hold the solution, time steps. In general, we want the solution at N + 1 
@@ -128,7 +128,7 @@ def RK2(F : torch.nn.Module, X0 : torch.Tensor, tau : torch.Tensor, T : torch.Te
     N   : int           = int(torch.ceil(T/dt).item());
 
     # Now, get the IC. We also use this chance to recover d.
-    X0_0    : torch.Tensor  = X0(torch.tensor(0));
+    X0_0    : torch.Tensor  = X0(torch.tensor(0, dtype = torch.float32));
     d       : int           = X0_0.shape[1];
 
     # Set up tensors to hold the solution, time steps. In general, we want the solution at N + 1 
