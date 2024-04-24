@@ -1,14 +1,18 @@
-import torch; 
+from    typing      import  List;
+
+import  torch; 
 
 # Logger setup 
-import logging;
+import  logging;
 LOGGER : logging.Logger = logging.getLogger(__name__);
 
 
 
 class Constant(torch.nn.Module):
     """
-    This class implements a constant IC function. 
+    This class implements a constant IC function:
+        X0(t) = x0
+    In this case, \phi = x0.
     """
     def __init__(self, x0 : torch.Tensor) -> None:
         """
@@ -52,6 +56,7 @@ class Affine(torch.nn.Module):
     """
     This class implements a simple affine IC:
         X0(t) = a*t + b
+    In this case, \phi = (a, b).
     """
     def __init__(self, a : torch.Tensor, b : torch.Tensor) -> None:
         """
@@ -100,7 +105,8 @@ class Affine(torch.nn.Module):
 class Periodic(torch.nn.Module):
     """
     This class implements a simple periodic IC:
-        X0(t) = A*cos(w*t)
+        X0(t) = A*cos(w*t) + b
+    In this case, \phi = (A, w, b).
     """
     def __init__(self, A : torch.Tensor, w : torch.Tensor, b : torch.Tensor) -> None:
         """
@@ -147,3 +153,80 @@ class Periodic(torch.nn.Module):
 
         # Compute the IC!
         return torch.mul(self.A, torch.sin(torch.mul(t, self.w))) + self.b;
+
+
+
+
+
+class Neural(torch.nn.Module):
+    """ 
+    This class implements a neural network IC:
+        X0(t) = F(t)
+    where F is a neural network. In this case, \phi is the parameters (weights/biases) of F.
+    """
+
+    def __init__(self, Widths : List[int]):
+        """ 
+        This class defines IC of a DDE as a neural network. We use Widths to define the widths of 
+        the layers in the network. We also use the softplus activation function after each hidden 
+        layer.
+
+
+        
+        --------------------------------------------------------------------------------------------
+        Arguments:
+        --------------------------------------------------------------------------------------------
+
+        Widths: This should be a list of N + 1 integers, where N is the number of layers in the 
+        neural network. Widths[0] represents the dimension of the domain, while Widths[-1] 
+        represents the dimension of the co-domain. For i \in {1, 2, ... , N - 2}, Widths[i] 
+        represents the width of the i'th hidden layer. Because a Neural object takes in t as its 
+        input, Widths[0] must be 2d + 2. Finally, Widths[1] must be d. 
+        """
+        
+        # Call the super class initializer. 
+        super(Neural, self).__init__();
+
+        # Make sure Widths is a list of ints.
+        self.N_Layers = len(Widths) - 1;
+        for i in range(self.N_Layers + 1):
+            assert(isinstance(Widths[i], int));
+        
+        # Find d, make sure 2*Widths[-1] + 2 == Widths[0].
+        self.d = Widths[-1];
+        assert(Widths[0] == 1);
+        self.Widths = Widths;
+
+        # Set up the network's layers.
+        self.Layers     = torch.nn.ModuleList();
+        for i in range(self.N_Layers):
+            self.Layers.append(torch.nn.Linear(in_features = Widths[i], out_features = Widths[i + 1]));
+            torch.nn.init.xavier_normal_(self.Layers[i].weight);
+
+            torch.nn.init.zeros_(self.Layers[i].bias);
+        
+        # Finally, set the activation function.
+        self.Activation = torch.nn.Softplus();
+
+
+
+    def forward(self, t : torch.Tensor) -> torch.Tensor:
+        """
+        This function passes t through the neural network and returns X0(t) (see class doc string).
+        
+        --------------------------------------------------------------------------------------------
+        Arguments:
+
+        t : This should be a 1D torch.Tensor whose i'th value holds the i'th t value.
+        """
+
+        t = t.reshape(-1, 1);
+
+        # Set up the input to the network.
+        X : torch.Tensor = t;
+
+        # Compute, return the output.  
+        for i in range(self.N_Layers - 1):
+            X = self.Activation(self.Layers[i](X));
+        Output : torch.Tensor = self.Layers[-1](X);
+        return Output;
