@@ -29,6 +29,9 @@ class Constant(torch.nn.Module):
         # Run checks
         assert(len(x0.shape) == 1);
 
+        # Set d.
+        self.d = x0.shape[0];
+
         # Store the constant x0 value as a parameter object.
         self.x0 = torch.nn.Parameter(x0, requires_grad = True);
 
@@ -73,6 +76,9 @@ class Affine(torch.nn.Module):
         assert(len(a.shape) == 1);
         assert(len(b.shape) == 1);
         assert(a.shape[0]   == b.shape[0]);
+
+        # Set d.
+        self.d = a.shape[0];
 
         # Store the constants a, b as parameters.
         self.a = torch.nn.Parameter(a.reshape(1, -1), requires_grad = True);
@@ -126,6 +132,9 @@ class Periodic(torch.nn.Module):
         assert(len(b.shape) == 1);
         assert(A.shape[0]   == w.shape[0]);
         assert(A.shape[0]   == b.shape[0]);
+
+        # set d.
+        self.d = A.shape[0];
 
         # Store the constants A, w as parameters.
         self.A = torch.nn.Parameter(A.reshape(1, -1), requires_grad = True);

@@ -335,7 +335,7 @@ class HIV(torch.nn.Module):
     involves the following DDE in \mathbb{R}^3, 
         (d/dt)T*(t)     = k T0 VI(t - tau) exp(-m tau) - d T*(t)
         (d/dt)V_{I}(t)  = (1 - np) d N T*(t) - c V_{I}(t)
-        (d/dt)V_{NI}    = np d N T*(t) - c V_{NI}(t)
+        (d/dt)V_{NI}(t) = np d N T*(t) - c V_{NI}(t)
     Here, k, d, np, N, and c are learnable parameters. T0 is a fixed constant. This equation 
     appears is from the following paper:
         

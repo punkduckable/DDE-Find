@@ -82,7 +82,8 @@ If you want to extend `DDE-Find` to a new kind of initial condition, you can do 
 a new class in `X0.py`. For a X0 class to work with the rest of `DDE-Find`, it must subclass 
 `torch.nn.Module` and its `forward` method must accept one argument, $t$. Further, each 
 learnable parameter must be a `torch.nn.parameter.Parameter` object (otherwise, the optimizer 
-will not see them). 
+will not see them). Further, each X0 object should have an internal `d` variable that keeps 
+track of the dimension of the output (the dimension of the space that the dynamics takes place in)
 
 If you want to make your X0 compatible with the `Experiments.py` script, each component of 
 $\phi$ must get its own `torch.nn.parameter.Parameter` object. For example, if 

@@ -16,11 +16,11 @@ from    torch.utils.tensorboard import  SummaryWriter;
 from    scipy                   import  interpolate;
 
 # My code
-from    Solver  import  RK2                 as DDE_Solver;
+from    Solver  import  Forward_Euler, RK2, RK4;
 from    NDDE    import  NDDE;
 from    Train   import  Train;
 from    Utils   import  Initialize_Logger, Initialize_MPL, Add_Noise, Log_Dict;
-from    Loss    import  L1_Cost, L2_Cost, Integral_Loss;
+from    Loss    import  L1_Cost, L2_Cost, Linf_Cost, Integral_Loss;
 
 # Set up the TensorBoard SummaryWriter
 Base_Dir    : str   = "./Logs";
@@ -36,12 +36,13 @@ import  logging;
 Initialize_Logger(level = logging.INFO);
 LOGGER : logging.Logger = logging.getLogger(__name__);
 
-# Set up cost functions.
-l = L1_Cost(Weight = 1.0);
-G = L1_Cost(Weight = 0.0);
-
 # Set up plotting. 
 Initialize_MPL();
+
+# Set up solver dictionary
+Solver_Dict : dict = {  "Forward Euler"   : Forward_Euler, 
+                        "RK2"             : RK2, 
+                        "RK4"             : RK4};
 
 
 
@@ -58,6 +59,10 @@ Config_File.close();
 
 # Next, let's make sure everything has the right type.
 assert(isinstance(Config['Experiment'],             str));
+
+assert(isinstance(Config['Norm'],                   str));
+
+assert(isinstance(Config["Solver"],                 str));
 
 assert(isinstance(Config['Noise Levels'],           list));
 for Noise_Level in Config['Noise Levels']:
@@ -80,6 +85,21 @@ assert(isinstance(Config['Loss Threshold'],         float));
 # -------------------------------------------------------------------------------------------------
 # Set up the noise-free target trajectory
 # -------------------------------------------------------------------------------------------------
+
+
+# Set up cost functions.
+if  (Config['Norm'] == "L1"):
+    l = L1_Cost(Weight = 1.0);
+    G = L1_Cost(Weight = 0.0);
+elif(Config['Norm'] == "L2"):
+    l = L2_Cost(Weight = 1.0);
+    G = L2_Cost(Weight = 0.0);
+elif(Config['Norm'] == "Linf"):
+    l = Linf_Cost(Weight = 1.0);
+    G = Linf_Cost(Weight = 0.0);
+else:
+    LOGGER.error("Invalid Norm selection! Exiting");
+    exit();
 
 # Log what we're doing.
 LOGGER.info("Setting up a %s experiment!" % Config['Experiment']);
@@ -114,7 +134,7 @@ elif(Config['Experiment'] == "Logistic"):
     F_Target        = F_Model(theta_0 = 2.0, theta_1 = 1.5);
     A_Target        = torch.Tensor([-0.5]);
     w_Target        = torch.Tensor([3.0]);
-    b_Target        = torch.Tensor([2]);
+    b_Target        = torch.Tensor([2.0]);
     X0_Target       = X0_Model(A = A_Target, w = w_Target, b = b_Target);
     tau_Target      = torch.tensor(1.0);
     N_tau           = 10;
@@ -149,6 +169,27 @@ elif(Config['Experiment'] == "Cheyne"):
     N_tau           = 10;
     T_Target        = torch.tensor(3.0);
 
+# HIV
+elif(Config['Experiment'] == "HIV"):
+    from    Model   import  HIV                 as F_Model;
+    from    X0      import  Periodic            as X0_Model;
+
+    # Set up the parameters and tau value for the target trajectory.
+    F_Target        = F_Model(  k   = .00343, 
+                                m   = 3.8, 
+                                d   = 0.05, 
+                                c   = 2.0,
+                                T0  = 1000.0, 
+                                np  = 0.43, 
+                                N   = 48.0);
+    A_Target        = torch.Tensor([1.0,    3.0,    0.0]);
+    w_Target        = torch.Tensor([1.0,    3.0,    0.0]);
+    b_Target        = torch.Tensor([10.0,   8.0,    0.0]);
+    X0_Target       = X0_Model(A = A_Target, w = w_Target, b = b_Target);
+    tau_Target      = torch.tensor(1.0);
+    N_tau           = 10;
+    T_Target        = torch.tensor(10.0);
+
 else:
     LOGGER.error("Invalid Experiment selection! Exiting");
     exit();
@@ -160,15 +201,18 @@ Parameter_Dict["True"]["Theta"] = {};
 for key, value in F_Target._parameters.items():
      Parameter_Dict["True"]["Theta"][key] = value.item();
 
+d : int = X0_Target.d;
 Parameter_Dict["True"]["Phi"] = {};
 for key, value in X0_Target._parameters.items():
-     Parameter_Dict["True"]["Phi"][key] = value.item();
+    value = value.reshape(-1);
+    for i in range(d):
+        Parameter_Dict["True"]["Phi"][key + str(i)] = value[i];
 
 # Confirm that we're done!
 LOGGER.info("Done!");
 
 # Now... make the true trajectory.
-x_True, t_True    = DDE_Solver(F = F_Target, X0 = X0_Target, tau = tau_Target, T = T_Target, N_tau = N_tau);
+x_True, t_True    = Solver_Dict[Config["Solver"]](F = F_Target, X0 = X0_Target, tau = tau_Target, T = T_Target, N_tau = N_tau);
 
 
 
@@ -246,12 +290,32 @@ for Noise_Level in Config['Noise Levels']:
             X0_MODEL            = X0_Model(a, b);
             Param_List  : List  = [tau] + list(F_MODEL.parameters()) + list(X0_MODEL.parameters());
 
+        # HIV
+        elif(Config['Experiment']   == "HIV"):
+            # Pick a starting position, tau, and x0
+            tau     = (tau_Target*0.25).clone().detach().requires_grad_(True);
+            A       = (torch.ones_like(A_Target)).clone().detach().requires_grad_(True);
+            w       = (w_Target*1.2).clone().detach().requires_grad_(True);
+            b       = (x_Target[0, :]).clone().detach().requires_grad_(True);
+            T       = torch.clone(T_Target).requires_grad_(False);
+
+            # Set up a NDDE object. We will try to train the enclosed model to match the one we used to generate the above plot.
+            F_MODEL     = F_Model(  k   = .00343, 
+                                    m   = 3.8, 
+                                    d   = 0.05, 
+                                    c   = 2.0,
+                                    T0  = 1000.0, 
+                                    np  = 0.43, 
+                                    N   = 48.0);
+            X0_MODEL    = X0_Model(A, w, b);
+            Param_List  : List  = [tau] + list(X0_MODEL.parameters());
+
         else: 
             LOGGER.error("Invalid Experiment selection! Exiting");
             exit(); 
 
         # Set up the DDE module.
-        DDE_Module  = NDDE(F = F_MODEL, X0 = X0_MODEL);
+        DDE_Module  = NDDE(F = F_MODEL, X0 = X0_MODEL, Solver_Name = Config["Solver"]);
 
         # Now... set up training.
         Optimizer           = torch.optim.Adam(Param_List, lr = Config['Learning Rate']);
@@ -277,15 +341,16 @@ for Noise_Level in Config['Noise Levels']:
 
         # Record the final set of parameter for this experiment.
         Parameter_Dict[Noise_Level][Experiment_index] = {  "Tau"   : tau.item() };
-
+        
         Parameter_Dict[Noise_Level][Experiment_index]["Theta"] = {};
         for key, value in F_MODEL._parameters.items():
             Parameter_Dict[Noise_Level][Experiment_index]["Theta"][key] = value.item();
 
         Parameter_Dict[Noise_Level][Experiment_index]["Phi"] = {};
         for key, value in X0_MODEL._parameters.items():
-            Parameter_Dict[Noise_Level][Experiment_index]["Phi"][key] = value.item();
-
+            value = value.reshape(-1);
+            for i in range(d):
+                Parameter_Dict[Noise_Level][Experiment_index]["Phi"][key + str(i)] = value[i];
 
 
 # -------------------------------------------------------------------------------------------------
@@ -300,7 +365,7 @@ print("---------------------------------------------");
 print("True          %f" % Parameter_Dict["True"]["Tau"]);
 for Noise_Level in Config['Noise Levels']:
     print("---------------------------------------------");
-    print("              Noise level %5.2f              " % Noise_Level);
+    print("              Noise level %5.3f              " % Noise_Level);
     print("---------------------------------------------");
     for Experiment_index in range(Config["Number of Experiments"]):
         print("%3d           %f" % (Experiment_index, Parameter_Dict[Noise_Level][Experiment_index]["Tau"]));
@@ -321,7 +386,7 @@ print(Line);
 
 for Noise_Level in Config['Noise Levels']:
     print("---------------------------------------------");
-    print("              Noise level %5.2f              " % Noise_Level);
+    print("              Noise level %5.3f              " % Noise_Level);
     print("---------------------------------------------");
     for Experiment_index in range(Config["Number of Experiments"]):
         Line : str = "%4d " % Experiment_index;
@@ -336,20 +401,23 @@ print("                  Phi Table!                 ");
 print("---------------------------------------------");
 Line : str = "     ";
 for (key, item) in X0_Target._parameters.items():
-    Line += " %7s " % key;
+    for i in range(d):
+        Line += " %8s " % (key + "[" + str(i) + "]");
 print(Line);
 
 Line : str = "True ";
 for (key, item) in X0_Target._parameters.items():
-    Line += " %7.3f " % Parameter_Dict["True"]["Phi"][key];
+    for i in range(d):
+        Line += " %8.4f " % Parameter_Dict["True"]["Phi"][key + str(i)];
 print(Line);
 
 for Noise_Level in Config['Noise Levels']:
     print("---------------------------------------------");
-    print("              Noise level %5.2f              " % Noise_Level);
+    print("              Noise level %5.3f              " % Noise_Level);
     print("---------------------------------------------");
     for Experiment_index in range(Config["Number of Experiments"]):
         Line : str = "%4d " % Experiment_index;
-        for (key, item) in X0_Target._parameters.items():
-            Line += " %7.3f " % Parameter_Dict[Noise_Level][Experiment_index]["Phi"][key];
+        for (key, value) in X0_Target._parameters.items():
+            for i in range(d):
+                Line += " %8.4f " % Parameter_Dict[Noise_Level][Experiment_index]["Phi"][key + str(i)];
         print(Line);
