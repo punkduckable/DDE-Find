@@ -3,12 +3,17 @@ from    typing  import  Tuple, Callable, List;
 from    scipy   import  interpolate;
 import  matplotlib.pyplot as plt;
 
-from    Solver  import  RK2             as DDE_Solver;
+from    Solver  import  Forward_Euler, RK2, RK4;
 
 # Logger setup 
 import logging;
 LOGGER : logging.Logger = logging.getLogger(__name__);
 
+# A dictionary we use to pick which solver we are using. This changes the solver that 
+# we use for both the forward and backward passes.
+Solver_Dict     : dict  =   {   "Forward Euler"   : Forward_Euler, 
+                                "RK2"             : RK2, 
+                                "RK4"             : RK4};
 
 
 class NDDE(torch.nn.Module):
@@ -21,7 +26,7 @@ class NDDE(torch.nn.Module):
     [0, T] and then returns the result.
     """
     
-    def __init__(self, F : torch.nn.Module, X0 : torch.nn.Module) -> None:
+    def __init__(self, F : torch.nn.Module, X0 : torch.nn.Module, Solver_Name : str = "RK2") -> None:
         """
         -------------------------------------------------------------------------------------------
         Arguments:
@@ -36,14 +41,20 @@ class NDDE(torch.nn.Module):
         time t \in [-\tau, 0], we set the initial condition at time t to X0(t). X0 should be a
         torch.nn.Module object which takes a tensor (of shape S) of time values and returns a S x d
         tensor[s, :] element holds the value of the IC at the s'th element of the input tensor.
+
+        Solver_Name: A string specifying which DDE solver we want to use during the forward pass.
+        Valid options are "Forward Euler", "RK2" and "RK4".
         """
+
+        assert(Solver_Name      in ("Forward Euler", "RK2", "RK4"));
 
         # Call the super class initializer.
         super(NDDE, self).__init__();
 
         # Store the right hand side and the IC.
-        self.F      = F;
-        self.X0     = X0;
+        self.F              = F;
+        self.X0             = X0;
+        self.Solver_Name    = Solver_Name;
         
 
 
@@ -96,7 +107,7 @@ class NDDE(torch.nn.Module):
             N_X0_Params += 1;
 
         # Evaluate the neural DDE using F, tau, and X0.
-        Trajectory : torch.Tensor = DDE_adjoint_Backward.apply(F, X0, tau, N_tau, T, l, G, x_Targ_Interp, N_F_Params, N_X0_Params, *Params);
+        Trajectory : torch.Tensor = DDE_adjoint_Backward.apply(F, X0, tau, N_tau, T, l, G, x_Targ_Interp, self.Solver_Name, N_F_Params, N_X0_Params, *Params);
         return Trajectory;
 
 
@@ -127,6 +138,7 @@ class DDE_adjoint_Backward(torch.autograd.Function):
                 l               : torch.nn.Module, 
                 G               : torch.nn.Module,
                 x_Targ_Interp   : Callable, 
+                Solver_Name     : str,
                 N_F_Params      : int,
                 N_X0_Params     : int,
                 *Params         : torch.Tensor) -> torch.Tensor:
@@ -164,6 +176,9 @@ class DDE_adjoint_Backward(torch.autograd.Function):
         x_Target_Interp: An interpolation object for the target trajectory. We need this to be able 
         to evaluate dl/dx when computing the adjoint in the backwards pass. 
 
+        Solver_Name: A string specifying which DDE solver we want to use for the forward and 
+        backward passes. Valid options are "Forward Euler", "RK2", and "Rk4".
+
         N_F_Params: The number of tensor parameters in F. The first N_F_Params elements of Params 
         should hold F's parameters (each one of which is a tensor).
 
@@ -197,7 +212,7 @@ class DDE_adjoint_Backward(torch.autograd.Function):
         ctx.mark_non_differentiable(T);
 
         # Compute the forward solution using the DDE solver. 
-        x_Trajectory, t_Trajectory = DDE_Solver(F = F, X0 = X0, tau = tau, T = T, N_tau = N_tau);
+        x_Trajectory, t_Trajectory = Solver_Dict[Solver_Name](F = F, X0 = X0, tau = tau, T = T, N_tau = N_tau);
             
         # Save non-tensor arguments for backwards.
         ctx.F               = F; 
@@ -206,6 +221,7 @@ class DDE_adjoint_Backward(torch.autograd.Function):
         ctx.x_Targ_Interp   = x_Targ_Interp;
         ctx.l               = l;
         ctx.G               = G;
+        ctx.Solver_Name     = Solver_Name;
         ctx.N_F_Params      = N_F_Params;
         ctx.N_X0_Params     = N_X0_Params;
 
@@ -229,6 +245,7 @@ class DDE_adjoint_Backward(torch.autograd.Function):
         x_Targ_Interp   : Callable                          = ctx.x_Targ_Interp;
         l               : torch.nn.Module                   = ctx.l;
         G               : torch.nn.Module                   = ctx.G;
+        Solver_Name     : str                               = ctx.Solver_Name;
         N_F_Params      : int                               = ctx.N_F_Params;
         N_X0_Params     : int                               = ctx.N_X0_Params; 
         tau, T, x_Trajectory, t_Trajectory, *Params         = ctx.saved_tensors;
@@ -392,51 +409,73 @@ class DDE_adjoint_Backward(torch.autograd.Function):
             # -------------------------------------------------------------------------------------
             # Update p
 
-            # Find p at the previous time step. Recall that p satisfies the following DDE:
-            #       p'(t) = -dF_dx(t)^T p(t)  - dF_dy(t + tau)^T p(t + tau) 1_{t + tau < T}(t) + d l(x(t))/d x(t)
-            #       p(T)  = dG_dX(x(T))  
-            # We find a numerical solution to this DDE using the RK2 method. In this case, we 
-            # compute
-            #       p(t - dt) \approx p(t) - dt*0.5*(k1 + k2)
-            #       k1 = -dF_dx(t)^T p(t)  - dF_dy(t + tau)^T p(t + tau) 1_{t + tau < T}(t) + d l(x(t))/d x(t)
-            #       k2 = -dF_dx(t - dt)^T [p(t) - dt*k1]  - dF_dy(t + tau - dt)^T p(t - dt + tau) 1_{t - dt + tau < T}(t) + d l(x(t - dt))/d x(t - dt)
-
+            """
+            Find p at the previous time step. Recall that p satisfies the following DDE:
+                p'(t) = -dF_dx(t)^T p(t)  - dF_dy(t + tau)^T p(t + tau) 1_{t + tau < T}(t) + d l(x(t))/d x(t)
+                p(T)  = dG_dX(x(T))  
+            We find a numerical solution to this DDE using either the Forward Euler, RK2, or RK4 
+            methods. For brevity in what follows, we will let G denote the right hand side of the 
+            p DDE. That is, 
+                G(p(t), p(t + tau), tau, t) =  -dF_dx(t)^T p(t)  - dF_dy(t + tau)^T p(t + tau) 1_{t + tau < T}(t) + d l(x(t))/d x(t)
+            """      
+            
             # Only compute p at the next time step if there is a next time step.
             if(j > 0):
-                # First, compute k1
-                k1 : torch.Tensor   = -dFdx_T_p[j, :] + dldx[j, :]
-                if(j + N_tau < N):
-                    k1 -= dFdy_T_p[j + N_tau, :];
+                # Forward Euler
+                if  (Solver_Name ==   "Forward Euler"):
+                    # In this approach, we simply compute 
+                    #   p(t - dt) \approx p(t) - dt G(p(t), p(t + tau), tau, t)
 
-                # To compute k2, we need to first compute the Jacobian Vector product -dF_dx(t - dt)^T [p(t) - dt*k1].
-                torch.set_grad_enabled(True);
-
-                t_jm1               : torch.Tensor  = t_Values[j - 1];
-                x_jm1               : torch.Tensor  = x_Pred_Values[j - 1,          :].requires_grad_(True);
-                y_jm1               : torch.Tensor  = x_Pred_Values[j - 1 - N_tau,  :].requires_grad_(False) if j - 1 - N_tau >= 0 else X0(t_jm1 - tau).detach().reshape(-1).requires_grad_(False);
-                F_jm1               : torch.Tensor  = F(x_jm1, y_jm1, tau, t_jm1);
-                p_k1_t_dFdx_t       : torch.Tensor  = torch.autograd.grad(  outputs         = F_jm1, 
-                                                                            inputs          = x_jm1, 
-                                                                            grad_outputs    = p_j - dt*k1)[0];
-
-                torch.set_grad_enabled(False);
-
-                # We can now compute k2
-                k2 : torch.Tensor   = -p_k1_t_dFdx_t + dldx[j - 1, :];
-                if(j - 1 + N_tau < N):
-                    k2 -= dFdy_T_p[j - 1 + N_tau, :];
-
-                # Finally, we can compute p.
-                p[j - 1, :] = p[j, :] - dt*0.5*(k1 + k2);
+                    # Forward Euler Method
+                    if(j + N_tau >= N):
+                        p[j - 1, :] = p[j, :] - dt*(-dFdx_T_p[j, :] + dldx[j, :]);
+                    else: 
+                        p[j - 1, :] = p[j, :] - dt*(-dFdx_T_p[j, :] + dldx[j, :] - dFdy_T_p[j + N_tau, :]);
                 
-                """
-                # Forward Euler Method
-                if(j + N_tau >= N):
-                    p[j - 1, :] = p[j, :] - dt*(-dFdx_T_p[j, :] + dldx[j, :]);
-                else: 
-                    p[j - 1, :] = p[j, :] - dt*(-dFdx_T_p[j, :] + dldx[j, :] - dFdy_T_p[j + N_tau, :]);
-                """
+                # RK2, RK4
+                else: # Solver_Name ==     "RK2" or Solver_Name == "RK4"
+                    """
+                    In this case, we have
+                        p(t - dt) \approx p(t) - (dt/2)(k_1 + k_2)
+                        
+                        k_1 = G(p(t), p(t + tau), tau, t) 
+                            = -dF_dx(t)^T p(t)  - dF_dy(t + tau)^T p(t + tau) 1_{t + tau < T}(t) + d l(x(t))/d x(t)
 
+                        k_2 = G(p(t) - dt*k_1, p(t + tau - dt), tau, t - dt)
+                            = -dF_dx(t - dt)^T [p(t) - dt*k1]  - dF_dy(t + tau - dt)^T p(t - dt + tau) 1_{t - dt + tau < T}(t) + d l(x(t - dt))/d x(t - dt)
+                    
+                    Note: The RK4 method is impractical for the backwards pass because it requires 
+                    an accurate estimate of x(t - dt/2) to compute the (dl/dx) term for the k_2 and 
+                    k_3 steps. We could do this via interpolation or via data stored from the
+                    forward pass, but doing so could be sketchy. Thus, instead, we use the RK2 
+                    method in both cases for the backward step.
+                    """
+
+                    # First, compute k1
+                    k1 : torch.Tensor   = -dFdx_T_p[j, :] + dldx[j, :]
+                    if(j + N_tau < N):
+                        k1 -= dFdy_T_p[j + N_tau, :];
+
+                    # To compute k2, we need to first compute the Jacobian Vector product -dF_dx(t - dt)^T [p(t) - dt*k1].
+                    torch.set_grad_enabled(True);
+
+                    t_jm1               : torch.Tensor  = t_Values[j - 1];
+                    x_jm1               : torch.Tensor  = x_Pred_Values[j - 1,          :].requires_grad_(True);
+                    y_jm1               : torch.Tensor  = x_Pred_Values[j - 1 - N_tau,  :].requires_grad_(False) if j - 1 - N_tau >= 0 else X0(t_jm1 - tau).detach().reshape(-1).requires_grad_(False);
+                    F_jm1               : torch.Tensor  = F(x_jm1, y_jm1, tau, t_jm1);
+                    p_k1_t_dFdx_t       : torch.Tensor  = torch.autograd.grad(  outputs         = F_jm1, 
+                                                                                inputs          = x_jm1, 
+                                                                                grad_outputs    = p_j - dt*k1)[0];
+
+                    torch.set_grad_enabled(False);
+
+                    # We can now compute k2
+                    k2 : torch.Tensor   = -p_k1_t_dFdx_t + dldx[j - 1, :];
+                    if(j - 1 + N_tau < N):
+                        k2 -= dFdy_T_p[j - 1 + N_tau, :];
+
+                    # Finally, we can compute p.
+                    p[j - 1, :] = p[j, :] - dt*0.5*(k1 + k2);
 
             # -------------------------------------------------------------------------------------
             # Accumulate results to compute integrals for dL_dtau, dL_dTheta, and dL_dPhi
@@ -523,7 +562,7 @@ class DDE_adjoint_Backward(torch.autograd.Function):
         p_0 : torch.Tensor  = p[0, :]*(1 + t_0/dt) - (t_0/dt)*p[1, :];
 
         # Next, let's compute (dX0_dPhi(0))^T p(0)
-        dX0dPhi_T_p_t0       = torch.autograd.grad(                     outputs         = X0(torch.tensor(0)).reshape(-1), 
+        dX0dPhi_T_p_t0       = torch.autograd.grad(                     outputs         = X0(torch.tensor(0, dtype = torch.float32)).reshape(-1), 
                                                                         inputs          = X0_Params,
                                                                         grad_outputs    = p_0);
         torch.set_grad_enabled(True);
@@ -535,5 +574,5 @@ class DDE_adjoint_Backward(torch.autograd.Function):
 
 
         # All done... The kth return argument represents the gradient for the kth argument to forward.
-        #      F,    X0,   tau,     N_Tau, T,    l,    G,    x_Targ_Interp, N_F_Params, N_X0_Params, Params 
-        return None, None, dL_dtau, None,  None, None, None, None,          None,       None,        *(dL_dTheta + dL_dPhi);
+        #      F,    X0,   tau,     N_Tau, T,    l,    G,    x_Targ_Interp, Solver_Name, N_F_Params, N_X0_Params, Params 
+        return None, None, dL_dtau, None,  None, None, None, None,          None,        None,       None,        *(dL_dTheta + dL_dPhi);

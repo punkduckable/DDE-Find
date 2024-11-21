@@ -9,6 +9,77 @@ LOGGER : logging.Logger = logging.getLogger(__name__);
 
 
 
+class L1_Cost(torch.nn.Module):
+    def __init__(self, Weight : Union[float, torch.Tensor]) -> None:
+        """
+        A L1 object is a functor which computes a weighted L1 norm between x and y. 
+        Specifically, it computes \sum_{i = 1}^{n} Weight_i |x_i - y_i|.
+
+        
+        -------------------------------------------------------------------------------------------
+        Arguments:
+
+        Weight: This defines the weight in the weighted L1 norm. Weight can be one of three things:
+        a float, a single element tensor, or a 1D tensor. If the weight is a float or a single 
+        element tensor, we compute Weight*||x - y||_1. If it is a 1D tensor, then it must have the 
+        same length as x, y. In this case, we compute sum_{i = 1}^{n} Weight_i |x_i - y_i|. 
+        """
+
+        # Run the super class initializer. 
+        super(L1_Cost, self).__init__();
+    
+        # Make sure the Weight has the right type.
+        if(  isinstance(Weight, float)):
+            self.d      = None;
+            self.Weight = torch.tensor([Weight], dtype = torch.float32);
+            
+        
+        else:
+            # Make sure we have a tensor.
+            assert(isinstance(Weight, torch.Tensor));
+
+            # We need to handle the single element tensor and 1D tensor cases separately. 
+            if(  Weight.numel() == 1):
+                self.d      = None;
+                self.Weight = Weight.reshape(-1);
+            
+            
+            else:
+                assert(len(Weight.shape) == 1);
+    
+                self.d      = Weight.numel();
+                self.Weight = Weight;
+
+
+
+    def forward(self, x : torch.Tensor, y : torch.Tensor) -> torch.Tensor:
+        """
+        This function computes a weighted L2 norm squared between x and y. Thus, if x, y \in 
+        \mathbb{R}^d, then we return 
+                Weight_0*|x_0 - y_0| + ... + Weight_{d - 1}*|x_{d - 1} - y_{d - 1}|
+
+                
+        -----------------------------------------------------------------------------------------------
+        Arguments:
+
+        x, y: 1D tensors. They must have the same number of components.
+        """
+
+        # Run checks.
+        assert(len(x.shape) == 1);
+        assert(x.shape      == y.shape);
+
+        # If self.Weight is a 1D vector, then the length of that vector must match the length of x
+        # and y. If self.Weight is a single element Weight, or a float, then x and y can have 
+        # arbitrary length; we set Weight_0 = ... = Weight_{d - 1} = self.Weight.
+        if(self.d is not None):
+            assert(x.numel() == self.d);
+            return torch.dot(self.Weight, torch.abs(x - y));
+        else:
+            return self.Weight*torch.sum(torch.abs(x - y));
+
+
+
 class L2_Cost(torch.nn.Module):
     def __init__(self, Weight : Union[float, torch.Tensor]) -> None:
         """
@@ -80,24 +151,24 @@ class L2_Cost(torch.nn.Module):
 
 
 
-class L1_Cost(torch.nn.Module):
+class Linf_Cost(torch.nn.Module):
     def __init__(self, Weight : Union[float, torch.Tensor]) -> None:
         """
-        A L1 object is a functor which computes a weighted L1 norm between x and y. 
-        Specifically, it computes \sum_{i = 1}^{n} Weight_i |x_i - y_i|.
+        A Linf_Cost object is a functor which computes a weighted L^\infty norm between x and y. 
+        Specifically, it computes max{ Weight_i |x_i - y_i| : i = 1, 2, ... , d }.
 
         
         -------------------------------------------------------------------------------------------
         Arguments:
 
-        Weight: This defines the weight in the weighted L1 norm. Weight can be one of three things:
-        a float, a single element tensor, or a 1D tensor. If the weight is a float or a single 
-        element tensor, we compute Weight*||x - y||_1. If it is a 1D tensor, then it must have the 
-        same length as x, y. In this case, we compute sum_{i = 1}^{n} Weight_i |x_i - y_i|. 
+        Weight: This defines the weight in the weighted L^\infty norm. Weight can be one of three 
+        things: a float, a single element tensor, or a 1D tensor. If the weight is a float or a 
+        single element tensor, we compute Weight*||x - y||_\infty. If it is a 1D tensor, then it
+        must have the same length as x, y. In this case, we compute max{ Weight_i |x_i - y_i|^2 }. 
         """
 
         # Run the super class initializer. 
-        super(L1_Cost, self).__init__();
+        super(Linf_Cost, self).__init__();
     
         # Make sure the Weight has the right type.
         if(  isinstance(Weight, float)):
@@ -127,7 +198,7 @@ class L1_Cost(torch.nn.Module):
         """
         This function computes a weighted L2 norm squared between x and y. Thus, if x, y \in 
         \mathbb{R}^d, then we return 
-                Weight_0*|x_0 - y_0| + ... + Weight_{d - 1}*|x_{d - 1} - y_{d - 1}|
+                Weight_0*(x_0 - y_0)^2 + ... + Weight_{d - 1}*(x_{d - 1} - y_{d - 1})^2
 
                 
         -----------------------------------------------------------------------------------------------
@@ -145,9 +216,10 @@ class L1_Cost(torch.nn.Module):
         # arbitrary length; we set Weight_0 = ... = Weight_{d - 1} = self.Weight.
         if(self.d is not None):
             assert(x.numel() == self.d);
-            return torch.dot(self.Weight, torch.abs(x - y));
+            return torch.max((self.Weight)*torch.abs(x - y));
         else:
-            return self.Weight*torch.sum(torch.abs(x - y));
+            return self.Weight*torch.max(torch.abs(x - y));
+
 
 
 
